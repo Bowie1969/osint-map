@@ -1,0 +1,8 @@
+[project]
+name = "osint-map"
+version = "0.1.0"
+description = "AI-attached OSINT entity graph: passive-source investigations mapped Maltego-style"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

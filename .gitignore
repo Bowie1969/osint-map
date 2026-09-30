@@ -1,0 +1,8 @@
+# case payloads stay local (only index.json is synced with the repo)
+cases/*
+!cases/index.json
+*.bak-*
+server.log
+__pycache__/
+*.pyc
+.pytest_cache/
