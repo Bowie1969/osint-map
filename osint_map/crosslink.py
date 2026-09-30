@@ -16,6 +16,7 @@ from .model import (
     entity_key,
     norm_name,
 )
+from .resolver import EXACT_ONLY_TYPES
 
 if TYPE_CHECKING:  # pragma: no cover
     from .core import Graph
@@ -67,10 +68,11 @@ def _types_ok(a: str, b: str) -> bool:
 
 
 def _fuzzy_blocked(t: str) -> bool:
-    """Types where a name similarity never implies identity (two IPs can't
-    fuzzy-match; companies differ by one letter all the time)."""
-    return t in ("ip", "netblock", "asn", "phone", "domain", "subdomain",
-                 "email", "username")
+    """Types where a name similarity never implies identity across cases
+    (two IPs can't fuzzy-match; companies differ by one letter all the time).
+    Strictly wider than resolver.EXACT_ONLY_TYPES: usernames are trio-fuzzy
+    within a case but cross-case they collide too easily (common handles)."""
+    return t in EXACT_ONLY_TYPES or t == "username"
 
 
 def bring_in(graph: "Graph", other: "Graph", entity_ids: list[str]) -> dict:

@@ -69,6 +69,13 @@ class TestSeedGraph(unittest.TestCase):
         r = g.add_entity("Lea", "person")
         self.assertEqual(r["fuzzy"], [])
 
+    def test_exact_only_types_never_fuzzy(self):
+        """Two adjacent IPs are two things, no matter how the strings look."""
+        g = seed_graph()
+        r = g.add_entity("198.49.23.145", "ip", source_tool="test")
+        self.assertEqual(r["fuzzy"], [])
+        self.assertEqual(g.pending_merge, [])
+
     def test_merge_reparents_edges(self):
         g = seed_graph()
         r = g.add_entity("Rodney Leeseon", "person", source_tool="test")

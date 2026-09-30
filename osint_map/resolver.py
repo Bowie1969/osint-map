@@ -31,6 +31,12 @@ def _fuzzy_ok(a_type: str, b_type: str) -> bool:
     """Same type required, with the person/username/email exception trio."""
     return a_type == b_type or (a_type in FUZZ_TRIO and b_type in FUZZ_TRIO)
 
+# Types whose names ARE their identity keys — two different canonical values
+# are two different things, however similar the strings look to difflib
+# ('198.49.23.144' vs '198.49.23.145' is no merge suggestion; it's an A record).
+EXACT_ONLY_TYPES = frozenset(
+    {"ip", "netblock", "asn", "phone", "email", "domain", "subdomain", "money"})
+
 
 def exact_match(graph: "Graph", etype: str, name: str, platform: str | None) -> object | None:
     """Entity whose derived key matches this one exactly, if any."""
@@ -51,6 +57,8 @@ def fuzzy_matches(graph: "Graph", etype: str, name: str, threshold: float,
     Short names are skipped — 'Lee' vs 'Lea' is noise, not signal."""
     probe = norm_name(name)
     if len(probe) < FUZZ_MIN_NAME_LEN:
+        return []
+    if etype in EXACT_ONLY_TYPES:
         return []
     hits = []
     for e in graph.entities.values():
