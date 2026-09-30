@@ -124,9 +124,10 @@ class Graph:
     def add_entity(self, name: str, etype: str, aliases: list[str] | None = None,
                    source_note: str = "", metadata: dict | None = None,
                    source_tool: str = "human", discovered_at: str | None = None,
-                   depth: int = 0) -> dict:
+                   depth: int = 0, seed: bool = False) -> dict:
         """Resolve → absorb or create. Fuzzy near-matches are returned as
-        suggestions, never merged silently."""
+        suggestions, never merged silently. seed=True anchors the graph
+        (depth recompute + gap detection start there)."""
         if etype not in ENTITY_TYPES:
             return {"error": f"unknown entity type {etype!r}",
                     "valid_types": ENTITY_TYPES}
@@ -160,6 +161,9 @@ class Graph:
                              f"name similarity {ratio:.2f} >= {rs.IN_CASE_FUZZ}")
             fuzzy.append({"id": other.id, "name": other.name,
                           "ratio": round(ratio, 3)})
+        if seed and eid not in self.seeds:
+            self.seeds.append(eid)
+            self.recompute_depth()
         self.dirty = True
         return {"id": eid, "matched_existing": existing is not None,
                 "fuzzy": fuzzy}

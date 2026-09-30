@@ -42,6 +42,26 @@ def stage(graph: "Graph", kind: str, payload: dict, batch_id: str = "") -> dict:
             "count": len(graph.staged_items)}
 
 
+def stage_ops(graph: "Graph", ops_item: dict) -> dict:
+    """Park a whole enrich ops-batch as one approval item (kind='ops')."""
+    batch_id = new_id("b")[:12]
+    item = {
+        "id": new_id("s"), "batch_id": batch_id, "kind": "ops",
+        "payload": ops_item,
+        "proposed_at": now_iso(),
+        "summary": {"tool": ops_item.get("tool"),
+                    "target": ops_item.get("target"),
+                    "entities": sum(1 for o in ops_item.get("ops", [])
+                                    if o[0] == "entity"),
+                    "links": sum(1 for o in ops_item.get("ops", [])
+                                 if o[0] == "link")},
+    }
+    graph.staged_items.append(item)
+    graph.dirty = True
+    return {"staged": True, "item_id": item["id"], "batch_id": batch_id,
+            "count": len(graph.staged_items)}
+
+
 def review(graph: "Graph") -> list[dict]:
     """Everything awaiting human action, UI-shaped."""
     return graph.staged_items + [
@@ -64,16 +84,22 @@ def act(graph: "Graph", item_ids: list[str], action: str) -> dict:
         if staged:
             if action == "approve":
                 p = staged["payload"]
-                if staged["kind"] == "entity":
+                if staged["kind"] == "ops":  # whole enrich batch
+                    from . import enrich as enrichm
+                    res = enrichm.apply_ops(
+                        graph, p.get("ops", []),
+                        source_note=f"approved:{p.get('tool')}",
+                        source_tool=p.get("tool", "approved"))
+                    graph.add_finding(
+                        f"STAGE APPROVED: enrich {p.get('tool')} "
+                        f"{p.get('target')} — {res}")
+                elif staged["kind"] == "entity":
                     r = graph.add_entity(p["name"], p["type"],
                                          aliases=p.get("aliases"),
                                          source_note=p.get("source_note", ""),
                                          metadata=p.get("metadata"),
-                                         source_tool="approved")
-                    if "error" not in r and p.get("seed") and "id" in r \
-                            and r["id"] not in graph.seeds:
-                        graph.seeds.append(r["id"])
-                        graph.recompute_depth()
+                                         source_tool="approved",
+                                         seed=bool(p.get("seed")))
                     if "error" in r:
                         errors.append(f'{staged["id"]}: {r["error"]}')
                 elif staged["kind"] == "link":
