@@ -70,6 +70,10 @@ def act(graph: "Graph", item_ids: list[str], action: str) -> dict:
                                          source_note=p.get("source_note", ""),
                                          metadata=p.get("metadata"),
                                          source_tool="approved")
+                    if "error" not in r and p.get("seed") and "id" in r \
+                            and r["id"] not in graph.seeds:
+                        graph.seeds.append(r["id"])
+                        graph.recompute_depth()
                     if "error" in r:
                         errors.append(f'{staged["id"]}: {r["error"]}')
                 elif staged["kind"] == "link":
