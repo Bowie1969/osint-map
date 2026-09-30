@@ -101,7 +101,7 @@ class Store:
         g = Graph()
         g.title = title or cid
         g.case_id = cid
-        self.write_case(g)
+        self.write_case(g, immediate=True)  # must be visible to the next request
         return {"case_id": cid, "title": g.title}
 
     def case_exists(self, case_id: str) -> bool:

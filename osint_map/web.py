@@ -101,6 +101,10 @@ header { grid-column: 1 / 3; display: flex; align-items: center;
   border-bottom: 1px solid var(--line); white-space: nowrap; }
 header h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 600; }
 header .meta { color: var(--dim); font-size: 12px; }
+header .hbtn { background: var(--panel2); color: var(--dim); font-size: 12px;
+  padding: 3px 10px; border: 1px solid var(--line); border-radius: 9px;
+  cursor: pointer; white-space: nowrap; }
+header .hbtn:hover { color: var(--text); border-color: var(--accent); }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 9px;
   border: 1px solid var(--line); color: var(--dim); cursor: pointer; }
 .badge.on { color: var(--warn); border-color: var(--warn); }
@@ -362,6 +366,28 @@ function focusPair(a,c){
 
 // ------------------------------------------------ actions
 function act(action, data){ post(Object.assign({action},data)); }
+
+// --------------------------------------------- new case / wipe (header)
+function hardReset(){ since = 0; cur = null; laid = false;
+  if (cy) cy.remove('*'); refresh(); }
+function newCase(){
+  const t = prompt('Name for the new case:', 'Untitled Case');
+  if (t === null) return;                     // cancelled
+  post({action:'new_case', title:t}, r=>{
+    if (r && r.error) alert('Could not create case: '+r.error);
+    else hardReset();
+  });
+}
+function wipeCase(){
+  const n = cur ? Object.keys(cur.entities).length : 0;
+  const m = cur ? (cur.edges||[]).length : 0;
+  if (!confirm('Wipe this case ('+n+' entities, '+m+' links)? '+
+      'History stays in the .bak backups inside cases/.')) return;
+  if (n > 8 && !confirm('That is a lot of work — really start from empty? '+
+      '(the old graph stays in the .bak chain)')) return;
+  post({action:'wipe_case'}, r=>{ if (r && r.error) alert(r.error);
+    else hardReset(); });
+}
 function prune(id){ const n=cur.entities[id];
   if (n && confirm('Prune "'+n.name+'" and its links?'))
     act('prune',{id}); }
@@ -455,6 +481,8 @@ _HTML = f"""<!doctype html>
   <h1 id="title">…</h1>
   <span class="meta" id="meta"></span>
   <span style="flex:1"></span>
+  <button class="hbtn" onclick="newCase()">＋ New case</button>
+  <button class="hbtn" onclick="wipeCase()">Wipe</button>
   <span class="badge" id="gapbadge">gaps</span>
   <span class="badge" id="mbadge">merges</span>
   <span class="badge" id="wbadge">write: auto</span>
@@ -490,8 +518,11 @@ class _Handler(BaseHTTPRequestHandler):
     def _g(self) -> Graph | None:
         """Fresh Graph from disk — the MCP server process mutates case.json
         concurrently, so we never rely on a stale in-memory copy. Each HTTP
-        request gets a fresh handler instance, so there is no memory cache."""
-        return self.store.load_case(self.case_id)
+        request gets a fresh handler instance, so there is no memory cache.
+        An empty case_id means 'auto' — resolve the newest case per request
+        (a wipe/new-case button must be able to change what is served)."""
+        cid = self.case_id or _resolve_case(self.store, "")
+        return self.store.load_case(cid)
 
     def _json(self, obj, code: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False, default=str).encode()
@@ -633,6 +664,21 @@ class _Handler(BaseHTTPRequestHandler):
         elif act == "note":
             g.add_finding(req.get("text", ""))
             out = {"note": True}
+        elif act == "new_case":
+            # The current case is untouched (already flushed); a fresh one
+            # becomes index[0], so /api/state resolves to it next poll.
+            t = str(req.get("title", "")).strip() or "Untitled Case"
+            out = self.store.new_case(t)
+        elif act == "wipe_case":
+            # Empty THIS case in place (same id/title: board keeps serving
+            # it). fresh.rev inherits the old rev so _flush drops a .bak-<rev>
+            # copy first — the .bak chain is the undo for a wipe.
+            fresh = Graph()
+            fresh.case_id = g.case_id
+            fresh.title = g.title
+            fresh.rev = g.rev
+            self.store.write_case(fresh, immediate=True)
+            out = {"wiped": g.case_id}
         else:
             out = {"error": f"unknown action {act!r}"}
 
@@ -644,17 +690,27 @@ class _Handler(BaseHTTPRequestHandler):
 
 def serve(store: Store | None = None, case_id: str = "", port: int = 8788,
           host: str = "127.0.0.1") -> ThreadingHTTPServer:
-    """Run the board. Returns the server (tests bind port=0 and poll)."""
+    """Run the board. Returns the server (tests bind port=0 and poll).
+
+    case_id pinning is opt-in: pinned serves THAT case forever; auto ("")
+    serves the newest case per request, so UI case actions can switch."""
     store = store or Store()
     global _store
     _store = store
-    cid = _resolve_case(store, case_id)
-    if not store.case_exists(cid):
-        raise SystemExit(f"case {cid!r} not found")
+    if case_id:
+        cid = _resolve_case(store, case_id)
+        if not store.case_exists(cid):
+            raise SystemExit(f"case {cid!r} not found")
+    else:
+        cid = ""
 
     handler = type("H", (_Handler,), {"store": store, "case_id": cid})
     httpd = ThreadingHTTPServer((host, port), handler)
-    title = store.load_case(cid).title
-    print(f"osint-map board: {title!r} ({cid}) → http://{host}:{port}"
-          "  (Ctrl-C to stop)", flush=True)
+    if cid:
+        title = (store.load_case(cid) or Graph()).title
+        print(f"osint-map board: {title!r} ({cid}) → http://{host}:{port}"
+              "  (Ctrl-C to stop)", flush=True)
+    else:
+        print(f"osint-map board (auto: newest case) → http://{host}:{port}",
+              flush=True)
     return httpd
