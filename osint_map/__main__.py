@@ -38,8 +38,14 @@ def main(argv: list[str] | None = None) -> int:
     g = store.load_case(args.case) if args.case else None
     if args.serve:
         from .web import serve
-        case = args.case
-        serve(store, case, host=args.host, port=args.port)
+        httpd = serve(store, args.case or "", host="127.0.0.1",
+                      port=args.port)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            httpd.server_close()
         return 0
     if g is None:
         print(f"no case {args.case!r} (see --list)", file=sys.stderr)
