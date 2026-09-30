@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Launcher for OSINT Graph Mapper (the case board).
+#
+# Same pattern as pentest-viewer: race-proof (the window opens only after the
+# server accepts connections), single-instance (a healthy server is reused),
+# and detached (the server outlives this launcher and any terminal).
+# Stdlib + generic shell only; python3 is a machine constant.
+#
+#   osint-map          launch the board (and open the app window)
+#   osint-map --stop   stop the background board server
+set -uo pipefail   # not -e: helper probes return non-zero by design
+
+SELF="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"   # project root (osint-map/)
+
+STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/osint-map-app"
+RUNFILE="$STATE_DIR/server.json"
+PROFILE="$STATE_DIR/profile"
+LOG="$STATE_DIR/server.log"
+mkdir -p "$STATE_DIR" "$PROFILE"
+
+SERVER_PID=""
+server_pid() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("pid",""))' "$RUNFILE" 2>/dev/null; }
+runfile_port() { [ -f "$RUNFILE" ] || return 1; server_pid "$RUNFILE" >/dev/null 2>&1 || return 1; python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("port",""))' "$RUNFILE" 2>/dev/null; }
+
+is_osint_board() {  # $1=port -> 0 if an osint-map board answers there
+  python3 - "$1" <<'PY'
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(
+            f"http://127.0.0.1:{sys.argv[1]}/api/state", timeout=1.5) as r:
+        json.load(r)
+except Exception:
+    sys.exit(1)
+PY
+}
+port_alive() { python3 -c "
+import socket, sys
+s = socket.socket(); s.settimeout(0.25)
+sys.exit(0 if s.connect_ex(('127.0.0.1', $1)) == 0 else 1)" 2>/dev/null; }
+
+# --- stop -------------------------------------------------------------------
+if [ "${1:-}" = "--stop" ]; then
+  if [ -f "$RUNFILE" ]; then
+    pid="$(server_pid)"
+    p="$(runfile_port 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    # Fallback: reap anything still bound to that exact port (bracketed 's[]'
+    # so this never matches the launcher's own argv, the old pkill footgun).
+    [ -n "$p" ] && pkill -f "[o]sint_map --serve --host 127.0.0.1 --port $p" 2>/dev/null || true
+    rm -f "$RUNFILE"
+    echo "osint-map: stopped board server${p:+ (was on port $p)}."
+  else
+    echo "osint-map: not running."
+  fi
+  exit 0
+fi
+
+# --- start or reuse ---------------------------------------------------------
+PORT=""
+if p="$(runfile_port)" && port_alive "$p"; then
+  PORT="$p"                      # healthy server we started before -> reuse
+elif [ -n "${OSINT_MAP_PORT:-}" ] && port_alive "$OSINT_MAP_PORT" \
+        && is_osint_board "$OSINT_MAP_PORT"; then
+  PORT="$OSINT_MAP_PORT"         # asked, alive and ours -> adopt it
+elif port_alive 8788 && is_osint_board 8788; then
+  PORT=8788                      # server already up (e.g. started by hand) -> reuse
+fi
+
+if [ -z "$PORT" ]; then
+  PORT="${OSINT_MAP_PORT:-8788}"
+  if port_alive "$PORT"; then    # occupied by something else -> first free port
+    PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  fi
+  nohup python3 -m osint_map --serve --host 127.0.0.1 --port "$PORT" \
+    </dev/null >"$LOG" 2>&1 &
+  SERVER_PID=$!
+  disown "$SERVER_PID" 2>/dev/null || true
+  printf '{"port": %s, "pid": %s}\n' "$PORT" "$SERVER_PID" > "$RUNFILE"
+
+  # Gate the window on real readiness (up to ~15s), as pentest-viewer does.
+  ready=0
+  for _ in $(seq 1 150); do
+    if port_alive "$PORT"; then ready=1; break; fi
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  if [ "$ready" != "1" ] || ! is_osint_board "$PORT"; then
+    echo "osint-map: server failed to come up on port $PORT" >&2
+    echo "  see $LOG" >&2
+    rm -f "$RUNFILE"
+    exit 1
+  fi
+  echo "osint-map: board server on $PORT (pid $SERVER_PID)"
+fi
+
+URL="http://127.0.0.1:${PORT}/"
+
+# Headless/scripted mode: server is up, skip opening any window.
+if [ "${OSINT_MAP_NO_BROWSER:-}" = "1" ]; then
+  echo "osint-map: $URL (browser suppressed)"
+  exit 0
+fi
+
+# Prefer a chromeless app window; fall back to a normal browser.
+APP_BROWSER=""
+for b in google-chrome google-chrome-stable chromium chromium-browser brave-browser; do
+  command -v "$b" >/dev/null 2>&1 && { APP_BROWSER="$b"; break; }
+done
+
+if [ -n "$APP_BROWSER" ]; then
+  nohup "$APP_BROWSER" --app="$URL" --user-data-dir="$PROFILE" \
+    --no-first-run --no-default-browser-check </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+else
+  (xdg-open "$URL" >/dev/null 2>&1 || python3 -m webbrowser "$URL" >/dev/null 2>&1) &
+fi
+
+echo "osint-map: $URL"
+echo "(board server runs in the background; '$SELF --stop' to stop it)"
+exit 0
